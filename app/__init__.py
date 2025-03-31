@@ -23,13 +23,13 @@ def create_app():
     
     # Register blueprints if not already registered
     if "admin" not in app.blueprints:
-        app.register_blueprint(admin)
+        app.register_blueprint(admin, url_prefix='/admin')
     if "users" not in app.blueprints:
-        app.register_blueprint(users_bp)
+        app.register_blueprint(users_bp, url_prefix='/api')
     if "progress" not in app.blueprints:
-        app.register_blueprint(progress)
+        app.register_blueprint(progress, url_prefix='/api/progress')
     if "chatbot" not in app.blueprints:
-        app.register_blueprint(chatbot)
+        app.register_blueprint(chatbot, url_prefix='/api/chat')
     if "main" not in app.blueprints:
         app.register_blueprint(main)
         

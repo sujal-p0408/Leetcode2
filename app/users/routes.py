@@ -1,8 +1,9 @@
 from flask import Blueprint, request, jsonify
 from middlewares.auth import token_required  
-from app import supabase  
+from app import supabase, client  # Import client from app
 from config import ADMIN_SECRET  # Load admin secret securely
 import re
+from datetime import datetime
 
 users_bp = Blueprint('users', __name__)
 
@@ -164,6 +165,7 @@ def google_login():
 @users_bp.route('/articles', methods=['GET'])
 @token_required
 def get_articles(user):
+    """Get all articles for users to read"""
     try:
         # Fetch articles from Supabase
         response = supabase.table("articles").select("*").execute()
@@ -216,9 +218,38 @@ def get_related_questions(user, article_id):
 @users_bp.route('/user/progress', methods=['GET'])
 @token_required
 def get_user_progress(user):
-    """Users can check their reading progress"""
-    response = supabase.table("userprogress").select("*").eq("user_id", user["id"]).execute()
-    return jsonify(response.data)
+    """Get user's learning progress and analytics"""
+    try:
+        # Get user's progress from userprogress table
+        progress_response = supabase.table("userprogress").select("*").eq("user_id", user["id"]).execute()
+        progress_data = progress_response.data if progress_response.data else []
+
+        # Get all articles for reference
+        articles_response = supabase.table("articles").select("*").execute()
+        articles = articles_response.data if articles_response.data else []
+
+        # Calculate progress metrics
+        total_articles = len(articles)
+        completed_articles = len(progress_data)
+        progress_percentage = (completed_articles / total_articles * 100) if total_articles > 0 else 0
+
+        # Get user's role
+        user_response = supabase.table("users").select("role").eq("id", user["id"]).execute()
+        user_role = user_response.data[0].get("role") if user_response.data else "user"
+
+        return jsonify({
+            "progress": {
+                "total_articles": total_articles,
+                "completed_articles": completed_articles,
+                "progress_percentage": progress_percentage
+            },
+            "user_role": user_role,
+            "progress_data": progress_data
+        })
+
+    except Exception as e:
+        print(f"Error fetching user progress: {str(e)}")
+        return jsonify({"error": "Failed to fetch user progress"}), 500
 
 @users_bp.route('/resend-verification', methods=['POST'])
 def resend_verification():
@@ -265,3 +296,109 @@ def list_users():
     except Exception as e:
         print("Error listing users:", str(e))
         return jsonify({"error": str(e)}), 500
+
+### --- 🤖 AI Assistance for DSA Questions ---
+@users_bp.route('/ai/assist', methods=['POST'])
+@token_required
+def get_ai_assistance(user):
+    """Get AI assistance for DSA questions"""
+    try:
+        data = request.get_json()
+        question = data.get("question")
+        
+        if not question:
+            return jsonify({"error": "Question is required"}), 400
+            
+        # Optimize the prompt for faster response
+        prompt = f"""As a DSA expert, please provide a clear and concise explanation for:
+{question}
+
+Focus on:
+1. Key concepts
+2. Time complexity
+3. Space complexity
+4. A practical example if relevant
+
+Keep the response concise but informative."""
+            
+        # Call DeepSeek API for AI response with simpler configuration
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "You are a DSA expert tutor. Provide clear, concise explanations with code examples when relevant."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=800
+        )
+        
+        # Extract the AI response
+        ai_response = response.choices[0].message.content
+        
+        # Store the interaction in Supabase
+        interaction_data = {
+            "user_id": user["id"],
+            "question": question,
+            "ai_response": ai_response
+        }
+        supabase.table("ai_interactions").insert(interaction_data).execute()
+        
+        return jsonify({
+            "response": ai_response,
+            "code_example": extract_code_example(ai_response) if "```" in ai_response else None
+        })
+        
+    except Exception as e:
+        print(f"AI assistance error: {str(e)}")
+        return jsonify({"error": "Failed to get AI response"}), 500
+
+def extract_code_example(response):
+    """Extract code example from AI response if present"""
+    try:
+        # Look for code blocks in the response
+        if "```" in response:
+            # Split by code blocks
+            parts = response.split("```")
+            # Find the first code block
+            for i in range(1, len(parts), 2):
+                code = parts[i].strip()
+                # Remove language identifier if present
+                if code.startswith("python"):
+                    code = code[6:].strip()
+                return code
+    except Exception as e:
+        print(f"Error extracting code: {str(e)}")
+    return None
+
+### --- 📚 Mark Article as Read ---
+@users_bp.route('/articles/<string:article_id>/mark-read', methods=['POST'])
+@token_required
+def mark_article_as_read(user, article_id):
+    """Mark an article as read for the current user"""
+    try:
+        # Check if article exists
+        article_response = supabase.table("articles").select("*").eq("id", article_id).execute()
+        if not article_response.data:
+            return jsonify({"error": "Article not found"}), 404
+            
+        # Check if already marked as read
+        existing_progress = supabase.table("userprogress").select("*").eq("user_id", user["id"]).eq("article_id", article_id).execute()
+        if existing_progress.data:
+            return jsonify({"message": "Article already marked as read"}), 200
+            
+        # Mark article as read
+        progress_entry = {
+            "user_id": user["id"],
+            "article_id": article_id,
+            "completed_at": datetime.utcnow().isoformat()
+        }
+        response = supabase.table("userprogress").insert(progress_entry).execute()
+        
+        return jsonify({
+            "message": "Article marked as read",
+            "progress": response.data[0]
+        })
+        
+    except Exception as e:
+        print(f"Error marking article as read: {str(e)}")
+        return jsonify({"error": "Failed to mark article as read"}), 500

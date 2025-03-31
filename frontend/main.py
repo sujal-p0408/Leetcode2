@@ -19,6 +19,16 @@ load_dotenv()
 # Backend URL
 BACKEND_URL = "http://127.0.0.1:5000"
 
+# API endpoints
+API_ENDPOINTS = {
+    "signup": f"{BACKEND_URL}/api/signup",
+    "login": f"{BACKEND_URL}/api/login",
+    "articles": f"{BACKEND_URL}/api/articles",
+    "progress": f"{BACKEND_URL}/api/user/progress",
+    "chat": f"{BACKEND_URL}/api/chat/api/chat",
+    "ai_assist": f"{BACKEND_URL}/api/ai/assist"
+}
+
 # Get environment variables and create Supabase client
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
@@ -111,7 +121,7 @@ def signup():
 
             try:
                 response = requests.post(
-                    f"{API_BASE_URL}/signup",
+                    API_ENDPOINTS["signup"],
                     headers={"Content-Type": "application/json"},
                     json=data
                 )
@@ -200,52 +210,13 @@ def login():
                 st.error("Please enter both email and password")
                 return
                 
-            # Use the API_BASE_URL variable to build the login URL
-            url = f"{API_BASE_URL}/login"
-            
-            # Create an expander for debugging information
-            with st.expander("🛠️ Debug Information", expanded=False):
-                st.write("Login URL:", url)
-                st.write("Email:", email)
-                st.write("Password:", "*" * len(password))
-            
             try:
-                # Check server health first
-                try:
-                    health_check_url = f"{API_BASE_URL}/"
-                    st.write(f"Checking server health at: {health_check_url}")
-                    health_response = requests.get(health_check_url, timeout=5)
-                    st.success(f"✅ Server is running. Status: {health_response.status_code}")
-                except requests.exceptions.ConnectionError:
-                    st.error("❌ Backend server is not running!")
-                    st.info("To fix this:")
-                    st.code("""
-                    # 1. Open a new terminal
-                    # 2. Navigate to your project root directory
-                    cd .
-                    
-                    # 3. Start the Flask server
-                    python run.py
-                    
-                    # 4. You should see: "Running on http://127.0.0.1:5000"
-                    """)
-                    return
-                except Exception as e:
-                    st.error(f"❌ Server health check error: {str(e)}")
-                    return
-                
-                # Proceed with login
-                st.write(f"Attempting to login at: {url}")
-                
                 response = requests.post(
-                    url,
+                    API_ENDPOINTS["login"],
                     headers={"Content-Type": "application/json"},
                     json={"email": email, "password": password},
                     timeout=10
                 )
-                
-                # Display response details
-                st.write(f"Response status code: {response.status_code}")
                 
                 if response.status_code == 200:
                     data = response.json()
@@ -256,7 +227,6 @@ def login():
                 elif response.status_code == 401:
                     st.error("❌ Invalid credentials. Please check your email and password.")
                     # Show test credentials as a hint
-                    st.info("Try using these test credentials:")
                     st.code("Email: test@example.com\nPassword: password123")
                 else:
                     st.error(f"❌ Login failed with status code: {response.status_code}")
@@ -292,21 +262,10 @@ def display_articles():
     # Show the current API URL being used
     st.info(f"API URL: {API_BASE_URL}")
     
-    # Debug: Display token information for troubleshooting
-    if st.session_state.token:
-        token_preview = st.session_state.token[:10] + "..." if len(st.session_state.token) > 10 else st.session_state.token
-        st.write(f"Debug - Using token: {token_preview}")
-        
     headers = {
         "Authorization": f"Bearer {st.session_state.token}",
         "Content-Type": "application/json"
     }
-    
-    # Create an expander for debugging information
-    with st.expander("🛠️ Debug Information"):
-        st.write("Headers:", headers)
-        st.write("API URL:", API_BASE_URL)
-        st.write("Endpoint:", f"{API_BASE_URL}/articles")
     
     try:
         # First, check if the server is running with a health check
@@ -328,7 +287,7 @@ def display_articles():
             return
         
         # Now fetch the articles
-        url = f"{API_BASE_URL}/articles"
+        url = API_ENDPOINTS["articles"]
         st.write(f"Fetching articles from: {url}")
         
         response = requests.get(
@@ -347,9 +306,33 @@ def display_articles():
                 if not articles:
                     st.info("No articles available yet.")
                 else:
+                    # Initialize completed articles in session state if not exists
+                    if 'completed_articles' not in st.session_state:
+                        st.session_state.completed_articles = set()
+                    
                     for article in articles:
+                        article_id = article.get('id')
                         with st.expander(f"📚 {article.get('title', 'Untitled')}"):
                             st.markdown(article.get('content', 'No content available'))
+                            
+                            # Add checkbox for article completion
+                            is_completed = article_id in st.session_state.completed_articles
+                            if st.checkbox("Mark as Completed", key=f"article_{article_id}", value=is_completed):
+                                try:
+                                    # Call backend to mark article as completed
+                                    mark_response = requests.post(
+                                        f"{API_BASE_URL}/api/articles/{article_id}/mark-read",
+                                        headers=headers,
+                                        timeout=5
+                                    )
+                                    
+                                    if mark_response.status_code == 200:
+                                        st.session_state.completed_articles.add(article_id)
+                                        st.success("✅ Article marked as completed!")
+                                    else:
+                                        st.error("Failed to mark article as completed")
+                                except Exception as e:
+                                    st.error(f"Error marking article as completed: {str(e)}")
             except ValueError:
                 st.error("Invalid response format from server")
                 st.write("Response content:", response.text[:200] + "..." if len(response.text) > 200 else response.text)
@@ -382,91 +365,133 @@ def display_articles():
         st.info("Please check if the backend server is running properly.")
 
 def display_progress():
-    st.header("📊 Learning Analytics")
+    st.header("Learning Analytics")
     
-    if 'token' not in st.session_state:
+    if 'token' not in st.session_state or not st.session_state.token:
         st.error("Please login first")
         return
-        
+    
+    # Show the current API URL being used
+    st.info(f"API URL: {API_BASE_URL}")
+    
     headers = {
         "Authorization": f"Bearer {st.session_state.token}",
-        "apikey": SUPABASE_KEY,
         "Content-Type": "application/json"
     }
     
     try:
+        # First, check if the server is running with a health check
+        try:
+            health_check_url = f"{API_BASE_URL}/"
+            st.write(f"Checking server health at: {health_check_url}")
+            health_response = requests.get(health_check_url, timeout=5)
+            st.success(f"✅ Server is running. Status: {health_response.status_code}")
+        except requests.exceptions.ConnectionError:
+            st.error("❌ Cannot connect to the server. Please ensure the backend is running.")
+            st.code("""
+            # Run this command in a new terminal:
+            cd app/backend
+            python app.py
+            """)
+            return
+        except Exception as e:
+            st.error(f"❌ Server health check error: {str(e)}")
+            return
+        
+        # Now fetch the progress data
+        url = API_ENDPOINTS["progress"]
+        st.write(f"Fetching progress data from: {url}")
+        
         response = requests.get(
-            f"{API_BASE_URL}/users/user/progress",
-            headers=headers
+            url,
+            headers=headers,
+            timeout=10
         )
         
+        st.write(f"Response status code: {response.status_code}")
+        
         if response.status_code == 200:
-            progress_data = response.json()
-            
-            # Display metrics in columns
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric(
-                    "Total Problems",
-                    value=50,  # Total problems available
-                    delta=f"+{len(st.session_state.completed_questions)} solved"
-                )
-            with col2:
-                completion_rate = (len(st.session_state.completed_questions) / 50) * 100
-                st.metric(
-                    "Completion Rate",
-                    value=f"{completion_rate:.1f}%",
-                    delta="↗️" if completion_rate > 50 else "↘️"
-                )
-            with col3:
-                st.metric(
-                    "Time Invested",
-                    value="12hrs",
-                    delta="2hrs this week"
-                )
-
-
-            # Add a progress bar
-            st.subheader("🎯 Overall Progress")
-            st.progress(completion_rate/100)
-            
-            # Add mock data for visualization
-            st.subheader("📈 Performance Trends")
-            chart_data = {
-                'Week': ['W1', 'W2', 'W3', 'W4'],
-                'Problems Solved': [5, 8, 12, 15],
-                'Avg Time (min)': [45, 40, 35, 30]
-            }
-            st.line_chart(chart_data)
-            
-            # Add a mock difficulty breakdown
-            st.subheader("💪 Difficulty Breakdown")
-            cols = st.columns(3)
-            difficulties = {
-                "Easy": 60,
-                "Medium": 35,
-                "Hard": 20
-            }
-            for i, (diff, percent) in enumerate(difficulties.items()):
-                with cols[i]:
-                    st.markdown(f"### {diff}")
-                    st.progress(percent/100)
-                    st.caption(f"{percent}% success rate")
-
-            # Display raw data in expander
-            with st.expander("🔍 Raw Progress Data"):
-                st.json(progress_data)
-            
+            try:
+                data = response.json()
+                
+                # Display overall progress
+                st.subheader("Overall Progress")
+                progress = data.get("progress", {})
+                total_articles = progress.get("total_articles", 0)
+                completed_articles = progress.get("completed_articles", 0)
+                progress_percentage = progress.get("progress_percentage", 0)
+                
+                # Create columns for metrics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Articles", total_articles)
+                with col2:
+                    st.metric("Completed Articles", completed_articles)
+                with col3:
+                    st.metric("Progress", f"{progress_percentage:.1f}%")
+                
+                # Progress bar
+                st.progress(progress_percentage / 100)
+                
+                # Display detailed progress data
+                st.subheader("Completed Articles")
+                progress_data = data.get("progress_data", [])
+                if progress_data:
+                    for item in progress_data:
+                        with st.expander(f"Article ID: {item.get('article_id', 'N/A')}"):
+                            st.write(f"Completed at: {item.get('completed_at', 'N/A')}")
+                            
+                            # Fetch article details
+                            try:
+                                article_response = requests.get(
+                                    f"{API_BASE_URL}/api/articles/{item.get('article_id')}",
+                                    headers=headers,
+                                    timeout=5
+                                )
+                                if article_response.status_code == 200:
+                                    article = article_response.json()
+                                    st.write(f"Title: {article.get('title', 'N/A')}")
+                                    st.write(f"Category: {article.get('category', 'N/A')}")
+                            except Exception as e:
+                                st.error(f"Error fetching article details: {str(e)}")
+                else:
+                    st.info("No articles completed yet. Start learning to track your progress!")
+                
+            except ValueError:
+                st.error("Invalid response format from server")
+                st.write("Response content:", response.text[:200] + "..." if len(response.text) > 200 else response.text)
+        elif response.status_code == 401:
+            st.error("Session expired or invalid token. Please login again.")
+            st.session_state.token = None
+            st.rerun()
         else:
-            st.error(f"Error: {response.status_code} - {response.text}")
+            st.error(f"Error fetching progress data. Status code: {response.status_code}")
+            st.write("Response content:", response.text)
             
+    except requests.exceptions.Timeout:
+        st.error("⚠️ Request timed out. The server took too long to respond.")
+        st.info("This usually indicates the server is overloaded or not responding properly.")
+    except requests.exceptions.ConnectionError:
+        st.error("⚠️ Unable to connect to the server.")
+        st.info("""
+        Please check:
+        1. The backend server is running
+        2. There are no firewall/network issues
+        3. The API URL is correct
+        """)
+        st.code("""
+        # Start the backend server:
+        cd app/backend
+        python app.py
+        """)
     except Exception as e:
-        st.error(f"Error fetching progress: {str(e)}")
+        st.error(f"⚠️ Unexpected error: {str(e)}")
+        st.info("Please check if the backend server is running properly.")
 
 def display_ai_assistance():
     st.header("🤖 AI Learning Assistant")
     
-    if 'token' not in st.session_state:
+    if 'token' not in st.session_state or not st.session_state.token:
         st.error("Please login first")
         return
         
@@ -475,31 +500,76 @@ def display_ai_assistance():
         if st.button("Get AI Help"):
             with st.spinner("Thinking..."):
                 try:
+                    # Show the API endpoint being used
+                    st.info(f"Using endpoint: {API_ENDPOINTS['ai_assist']}")
+                    
+                    # Increase timeout to 60 seconds
                     response = requests.post(
-                        f"{API_BASE_URL}/ai/assist",
+                        API_ENDPOINTS["ai_assist"],
                         headers={
                             "Authorization": f"Bearer {st.session_state.token}",
                             "Content-Type": "application/json"
                         },
-                        json={"question": user_question}
+                        json={"question": user_question},
+                        timeout=60  # Increased timeout
                     )
                     
+                    # Debug information
+                    st.write(f"Response status code: {response.status_code}")
+                    
                     if response.status_code == 200:
-                        ai_response = response.json()
-                        st.markdown("### 💡 AI Response")
-                        st.markdown(ai_response.get('response', ''))
-                        
-                        if 'code_example' in ai_response:
-                            st.markdown("### 📝 Code Example")
-                            st.code(ai_response['code_example'], language='python')
+                        try:
+                            ai_response = response.json()
+                            st.markdown("### 💡 AI Response")
+                            st.markdown(ai_response.get('response', ''))
+                            
+                            if ai_response.get('code_example'):
+                                st.markdown("### 📝 Code Example")
+                                st.code(ai_response['code_example'], language='python')
+                        except json.JSONDecodeError:
+                            st.error("Invalid response format from server")
+                            st.write("Raw response:", response.text)
                     else:
-                        st.error("Failed to get AI response")
+                        try:
+                            error_data = response.json()
+                            error_msg = error_data.get("error", "Failed to get AI response")
+                            st.error(f"Error: {error_msg}")
+                        except json.JSONDecodeError:
+                            st.error(f"Error: {response.text}")
                         
+                except requests.exceptions.Timeout:
+                    st.error("""
+                    Request timed out. This might be because:
+                    1. The AI model is taking longer than expected to respond
+                    2. The server is experiencing high load
+                    
+                    Please try again in a few moments. If the problem persists:
+                    1. Try asking a shorter question
+                    2. Check your internet connection
+                    3. Contact support if the issue continues
+                    """)
+                except requests.exceptions.ConnectionError:
+                    st.error("""
+                    Cannot connect to server. Please check:
+                    1. The backend server is running
+                    2. Your internet connection is working
+                    3. There are no firewall issues
+                    
+                    To start the backend server:
+                    ```bash
+                    python run.py
+                    ```
+                    """)
                 except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                    st.error(f"An error occurred: {str(e)}")
+                    st.write("Full error details:", str(e))
 
 def ai_chatbot():
-    st.header("AI Chatbot")
+    st.header("🤖 AI DSA Tutor")
+    
+    if 'token' not in st.session_state or not st.session_state.token:
+        st.error("Please login first")
+        return
     
     # Initialize chat history
     if "messages" not in st.session_state:
@@ -511,28 +581,47 @@ def ai_chatbot():
             st.markdown(message["content"])
 
     # Chat input
-    if prompt := st.chat_input("Ask me anything about DSA..."):
+    if prompt := st.chat_input("Ask me anything about Data Structures and Algorithms..."):
+        # Add user message to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        try:
-            # Call backend API instead of Deepseek directly
-            response = requests.post(
-                f"{BACKEND_URL}/api/chat",
-                headers={"Content-Type": "application/json"},
-                json={"prompt": prompt}
-            )
-            
-            if response.status_code == 200:
-                ai_response = response.json()["response"]
-                st.session_state.messages.append({"role": "assistant", "content": ai_response})
-                with st.chat_message("assistant"):
-                    st.markdown(ai_response)
-            else:
-                st.error(f"Failed to get response from backend: {response.text}")
-        except Exception as e:
-            st.error(f"An error occurred: {str(e)}")
+        # Show thinking message
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                try:
+                    # Call backend API
+                    response = requests.post(
+                        f"{API_BASE_URL}/api/chat",
+                        headers={
+                            "Authorization": f"Bearer {st.session_state.token}",
+                            "Content-Type": "application/json"
+                        },
+                        json={"prompt": prompt},
+                        timeout=30
+                    )
+                    
+                    if response.status_code == 200:
+                        ai_response = response.json()["response"]
+                        st.session_state.messages.append({"role": "assistant", "content": ai_response})
+                        st.markdown(ai_response)
+                    else:
+                        error_msg = response.json().get("error", "Failed to get response")
+                        st.error(f"Error: {error_msg}")
+                        
+                except requests.exceptions.Timeout:
+                    st.error("Request timed out. Please try again.")
+                except requests.exceptions.ConnectionError:
+                    st.error("Cannot connect to server. Please check if the backend is running.")
+                except Exception as e:
+                    st.error(f"An error occurred: {str(e)}")
+                    
+    # Add a clear chat button in the sidebar
+    with st.sidebar:
+        if st.button("🗑️ Clear Chat History"):
+            st.session_state.messages = []
+            st.rerun()
 
 def main():
     # Initialize session state
